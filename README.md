@@ -1,28 +1,66 @@
 # SCUBA Counter
 
-A production-ready starter for a viral camera challenge:
+A camera challenge you can ship for free:
 
 - Browser camera + MediaPipe Pose Landmarker
 - SCUBA-stroke counter with live motion coaching
-- Firebase Hosting web app
-- Firebase Auth anonymous sessions
-- Firebase App Check enforced callable Cloud Functions
-- Firestore leaderboard with public reads and no client writes
-- Server-side score verification from compact pose telemetry
+- On-device scoring with a local (per-browser) leaderboard
+- Static build — deploy free to Vercel (or any static host)
+
+> **This repo currently builds as a free, static, on-device app** — no backend, no account,
+> no hosting cost. See [Deploy: free static build (Vercel)](#deploy-free-static-build-vercel)
+> below. A Firebase server-verified mode (anonymous auth, App Check, Cloud Functions score
+> authority, Firestore leaderboard) is preserved in `functions/`, `firebase.json`, and the
+> `*.rules` files for when you want a shared, cheat-resistant leaderboard. Note: Cloud
+> Functions require the paid Blaze plan, so that mode is not free.
+
+## Deploy: free static build (Vercel)
+
+The app in `web/` runs entirely in the browser: MediaPipe pose detection, SCUBA-stroke
+counting, and a leaderboard stored in `localStorage`. Nothing is uploaded and there is no
+server cost.
+
+1. Push this repo to GitHub.
+2. In Vercel: **New Project -> import the repo**.
+3. Set **Root Directory** to `web` (important — this is a monorepo).
+4. Framework preset **Vite**; build command `npm run build`, output `dist` (auto-detected).
+5. Deploy. `web/vercel.json` adds the SPA fallback rewrite and security headers (CSP, etc.).
+
+Local dev and build:
+
+```bash
+cd web
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # outputs web/dist
+```
+
+Note: the leaderboard is per-browser/per-device — it is not shared between visitors, and
+scores are not server-verified in this mode.
 
 ## How the game works
 
-The counter detects a full “SCUBA stroke”:
+The counter detects a full "SCUBA stroke":
 
 1. Both wrists rise above or near the shoulder line.
 2. Both wrists pull down near the hips.
-3. The app uses hysteresis, visibility checks, body framing checks, minimum timing, and symmetry checks to count one official rep.
+3. The app uses hysteresis, visibility checks, body framing checks, minimum timing, and symmetry checks to count one rep.
 
-The client shows a live score for UX, but the leaderboard score is recalculated inside Cloud Functions from the submitted pose trace. The browser never gets permission to write scores directly.
+In the static build, the score shown is the official score and it is saved straight to the
+local leaderboard. (In the Firebase mode, the client score is only for UX and the score is
+recalculated server-side from the pose trace.)
 
-## Important security reality
+## Static build privacy & security
 
-A webcam-only game cannot be made perfectly cheat-proof because a determined attacker controls their browser, JavaScript runtime, camera feed, and network client. This project is hardened for public viral usage, not prize-money esports. For cash prizes, add one of these stronger layers:
+- The camera stream stays in the browser; no video or images are uploaded.
+- Pose detection runs locally via MediaPipe (WASM + model loaded from public CDNs).
+- The leaderboard lives in `localStorage`; clearing site data resets it.
+- `web/vercel.json` ships hardened headers: a strict Content-Security-Policy, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, a locked-down `Permissions-Policy` (camera only), and HSTS-style upgrades.
+
+## Optional: Firebase server-verified mode
+
+A webcam-only game cannot be made perfectly cheat-proof because a determined attacker controls their browser, JavaScript runtime, camera feed, and network client. The preserved Firebase mode is hardened for public viral usage, not prize-money esports. For cash prizes, add one of these stronger layers:
 
 - server-side random video spot checks,
 - WebRTC live verification rooms,
@@ -30,7 +68,7 @@ A webcam-only game cannot be made perfectly cheat-proof because a determined att
 - human moderation for top scores,
 - account reputation / phone / social sign-in for ranked mode.
 
-## Architecture
+### Architecture (Firebase mode)
 
 ```text
 web/                 React + Vite camera app
@@ -47,83 +85,22 @@ Function validates App Check + Auth + session nonce -> recomputes score -> write
 Client reads leaderboard from Firestore
 ```
 
-## Firebase setup
+### Firebase setup
 
-Create a Firebase project, then enable:
+To re-enable this mode: restore `web/src/firebase.ts` from git history, re-add the `firebase`
+dependency in `web/package.json`, and wire the firebase calls back into `web/src/App.tsx`.
+Then create a Firebase project and enable:
 
 1. Authentication -> Sign-in method -> Anonymous.
 2. Firestore Database -> Native mode.
 3. Hosting.
 4. App Check for the Web app using reCAPTCHA v3 or reCAPTCHA Enterprise.
-5. Cloud Functions.
+5. Cloud Functions (requires the Blaze plan).
 
-Copy the Firebase web config into `web/.env`:
+Copy the Firebase web config into `web/.env`, set your `VITE_FIREBASE_*` keys, and set your
+project ID in `.firebaserc` (see `.firebaserc.example`).
 
-```bash
-cp web/.env.example web/.env
-```
-
-Edit `.firebaserc`:
-
-```bash
-cp .firebaserc.example .firebaserc
-```
-
-Then set your project ID in `.firebaserc`.
-
-## App Check replay protection
-
-The Functions use:
-
-```ts
-enforceAppCheck: true,
-consumeAppCheckToken: true
-```
-
-For `consumeAppCheckToken: true`, grant the function runtime service account the **Firebase App Check Token Verifier** role in Google Cloud IAM. If you skip this, deployment can succeed but calls may fail at runtime.
-
-For local dev with App Check:
-
-1. Set `VITE_APPCHECK_DEBUG_TOKEN=true` in `web/.env`.
-2. Open DevTools. Firebase prints a debug token.
-3. Add that token in Firebase Console -> App Check -> Manage debug tokens.
-
-## Install and run
-
-Use Node.js 22+ for Cloud Functions.
-
-```bash
-npm install
-npm run build
-```
-
-Local web dev:
-
-```bash
-npm run dev
-```
-
-Firebase emulators:
-
-```bash
-npm run emulators
-```
-
-Deploy everything:
-
-```bash
-npm run deploy
-```
-
-Or deploy in pieces:
-
-```bash
-npm run deploy:rules
-npm run deploy:functions
-npm run deploy:hosting
-```
-
-## Security checklist before going public
+### Security checklist before going public (Firebase mode)
 
 - Keep `firestore.rules` as-is: public leaderboard read, no client writes.
 - Keep score writes inside Cloud Functions only.
@@ -137,18 +114,18 @@ npm run deploy:hosting
 
 ## Tuning the movement
 
-The browser and server intentionally use the same thresholds:
+The browser counter and the (optional) server validator use the same thresholds:
 
 - `HIGH_THRESHOLD = 0.16`
 - `LOW_THRESHOLD = 0.72`
 - `MIN_PULL_MS = 170`
 - `MIN_REP_GAP_MS = 240`
 
-Update both files together:
+If you use the Firebase mode, update both files together:
 
 - `web/src/lib/counter.ts`
 - `functions/src/scoreValidator.ts`
 
 ## Privacy
 
-No video is uploaded. The submission contains a compact array of normalized pose points for shoulders, elbows, wrists, and hips. This is still biometric-like motion data, so add a Privacy Policy before public launch.
+No video is uploaded. In the Firebase mode the submission contains a compact array of normalized pose points for shoulders, elbows, wrists, and hips — this is still biometric-like motion data, so add a Privacy Policy before public launch.

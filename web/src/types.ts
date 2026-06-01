@@ -1,7 +1,7 @@
 export type RunStatus = "idle" | "loading-model" | "ready" | "countdown" | "running" | "submitting" | "finished" | "error";
 
 export type CompactPoseSample = {
-  /** elapsed milliseconds since the server-authorized run began */
+  /** elapsed milliseconds since the run began */
   t: number;
   /** fixed order: leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist, leftHip, rightHip. Each point is x,y,visibility. */
   p: number[];
@@ -26,31 +26,24 @@ export type CounterSnapshot = {
   statusText: string;
 };
 
-export type StartRunOutput = {
-  runId: string;
-  nonce: string;
-  serverTimeMs: number;
-  maxDurationMs: number;
-  sampleIntervalMs: number;
-};
-
-export type SubmitRunOutput = {
+/** Result of a finished run, scored entirely on-device. */
+export type RunResult = {
   accepted: boolean;
   officialScore: number;
-  verifiedDurationMs: number;
-  rankHint?: number;
+  durationMs: number;
+  qualityAvg: number;
+  isNewBest: boolean;
   message: string;
-  flags: string[];
 };
 
+/** A single entry in the on-device (localStorage) leaderboard. */
 export type LeaderboardEntry = {
-  uid: string;
+  id: string;
   displayName: string;
   bestScore: number;
   bestDurationMs: number;
-  updatedAt?: unknown;
-  runId: string;
-  verified: boolean;
+  bestQualityAvg: number;
+  updatedAt: number;
 };
 
 export type SessionSummary = {

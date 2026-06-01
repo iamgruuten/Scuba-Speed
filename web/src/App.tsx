@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Lock, Medal, Play, RotateCcw, ShieldCheck, Waves } from "lucide-react";
+import { Camera, CheckCircle2, Lock, Medal, Play, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
 import type { NormalizedLandmark, PoseLandmarker } from "@mediapipe/tasks-vision";
-import {
-  ensureAnonymousUser,
-  startVerifiedRun,
-  submitVerifiedRun,
-  subscribeLeaderboard
-} from "./firebase";
 import { ScubaCounterEngine, summarizeQuality } from "./lib/counter";
+import { clearLeaderboard, loadLeaderboard, saveScore } from "./lib/leaderboard";
 import {
   createPoseLandmarker,
   drawPoseOverlay,
@@ -15,11 +10,13 @@ import {
   startCamera,
   stopCamera
 } from "./lib/pose";
-import type { CompactPoseSample, LeaderboardEntry, RunStatus, SubmitRunOutput } from "./types";
+import type { CompactPoseSample, LeaderboardEntry, RunResult, RunStatus } from "./types";
 
 const DEFAULT_DURATION_SECONDS = 30;
 const COUNTDOWN_SECONDS = 3;
 const MAX_LOCAL_SAMPLES = 1300;
+const MAX_DURATION_MS = 60_000;
+const SAMPLE_INTERVAL_MS = 83; // ~12 Hz. Enough for accurate counting, light on the CPU.
 
 function safeError(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -46,8 +43,6 @@ export default function App() {
   const finishingRef = useRef(false);
   const runRef = useRef<{
     active: boolean;
-    runId: string;
-    nonce: string;
     startedAtPerf: number;
     durationMs: number;
     lastSampleAtPerf: number;
@@ -63,7 +58,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [localCount, setLocalCount] = useState(0);
-  const [official, setOfficial] = useState<SubmitRunOutput | null>(null);
+  const [official, setOfficial] = useState<RunResult | null>(null);
   const [quality, setQuality] = useState(0);
   const [stageText, setStageText] = useState("Enable camera to calibrate");
   const [remainingMs, setRemainingMs] = useState(DEFAULT_DURATION_SECONDS * 1000);
@@ -73,16 +68,9 @@ export default function App() {
   const canStart = cameraReady && status !== "running" && status !== "submitting" && status !== "countdown";
 
   useEffect(() => {
-    let unsubscribeLeaderboard: (() => void) | null = null;
-
-    ensureAnonymousUser()
-      .then(() => {
-        unsubscribeLeaderboard = subscribeLeaderboard(setLeaderboard, (err) => setError(safeError(err)));
-      })
-      .catch((err) => setError(safeError(err)));
+    setLeaderboard(loadLeaderboard());
 
     return () => {
-      unsubscribeLeaderboard?.();
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       stopCamera(streamRef.current);
       landmarkerRef.current?.close();
@@ -135,7 +123,7 @@ export default function App() {
           }
 
           if (elapsedMs >= run.durationMs && !finishingRef.current) {
-            void finishRun();
+            finishRun();
           }
         } else if (landmarks) {
           currentQuality = engineRef.current.snapshot().quality;
@@ -183,7 +171,6 @@ export default function App() {
       finishingRef.current = false;
       localStorage.setItem("scuba-name", cleanName);
 
-      const authorized = await startVerifiedRun(cleanName);
       engineRef.current.reset();
       telemetryRef.current = [];
       setStatus("countdown");
@@ -197,12 +184,10 @@ export default function App() {
       const start = performance.now();
       runRef.current = {
         active: true,
-        runId: authorized.runId,
-        nonce: authorized.nonce,
         startedAtPerf: start,
-        durationMs: Math.min(durationSeconds * 1000, authorized.maxDurationMs),
-        lastSampleAtPerf: start - authorized.sampleIntervalMs,
-        sampleIntervalMs: authorized.sampleIntervalMs,
+        durationMs: Math.min(durationSeconds * 1000, MAX_DURATION_MS),
+        lastSampleAtPerf: start - SAMPLE_INTERVAL_MS,
+        sampleIntervalMs: SAMPLE_INTERVAL_MS,
         displayName: cleanName
       };
       setStatus("running");
@@ -214,40 +199,57 @@ export default function App() {
     }
   }
 
-  async function finishRun() {
+  function finishRun() {
     const run = runRef.current;
     if (!run || finishingRef.current) return;
     finishingRef.current = true;
     run.active = false;
     setStatus("submitting");
-    setStageText("Verifying score on server…");
-
-    const telemetry = telemetryRef.current.slice();
-    const durationMs = telemetry.length > 0 ? telemetry[telemetry.length - 1].t : run.durationMs;
-    const officialLocalCount = engineRef.current.snapshot().count;
-    const summary = {
-      localCount: officialLocalCount,
-      durationMs,
-      qualityAvg: summarizeQuality(telemetry),
-      samples: telemetry.length
-    };
+    setStageText("Saving your score…");
 
     try {
-      const result = await submitVerifiedRun({
-        runId: run.runId,
-        nonce: run.nonce,
-        displayName: run.displayName,
-        telemetry,
-        summary
-      });
-      setOfficial(result);
-      setLocalCount(result.officialScore);
+      const telemetry = telemetryRef.current.slice();
+      const durationMs = telemetry.length > 0 ? telemetry[telemetry.length - 1].t : run.durationMs;
+      const finalCount = engineRef.current.snapshot().count;
+      const qualityAvg = summarizeQuality(telemetry);
+      const accepted = finalCount > 0;
+
+      if (accepted) {
+        const { entries, isNewBest } = saveScore({
+          displayName: run.displayName,
+          score: finalCount,
+          durationMs,
+          qualityAvg
+        });
+        setLeaderboard(entries);
+        setOfficial({
+          accepted: true,
+          officialScore: finalCount,
+          durationMs,
+          qualityAvg,
+          isNewBest,
+          message: isNewBest
+            ? "New personal best saved to your leaderboard."
+            : "Saved. Your previous best is still higher."
+        });
+      } else {
+        setOfficial({
+          accepted: false,
+          officialScore: 0,
+          durationMs,
+          qualityAvg,
+          isNewBest: false,
+          message: "No reps detected. Frame your upper body and try again."
+        });
+      }
+
+      setLocalCount(finalCount);
       setStatus("finished");
-      setStageText(result.accepted ? "Official score verified" : "Run rejected by validator");
+      setStageText(accepted ? "Score saved to your leaderboard" : "No reps detected");
     } catch (err) {
-      setStatus("ready");
+      setStatus(cameraReady ? "ready" : "error");
       setError(safeError(err));
-      setStageText("Run was not submitted");
+      setStageText("Run was not saved");
     } finally {
       runRef.current = null;
       finishingRef.current = false;
@@ -269,6 +271,10 @@ export default function App() {
     setCountdown(null);
   }
 
+  function handleClearLeaderboard() {
+    setLeaderboard(clearLeaderboard());
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -276,11 +282,12 @@ export default function App() {
           <p className="eyebrow"><Waves size={18} /> Viral camera challenge</p>
           <h1>SCUBA Counter</h1>
           <p className="hero-copy">
-            Raise both hands, pull down like an underwater scuba stroke, and race the live leaderboard.
-            Scores are verified by Firebase Cloud Functions from pose telemetry before they are published.
+            Raise both hands, pull down like an underwater scuba stroke, and beat your own best.
+            Everything runs on your device — your camera feed never leaves the browser, and scores
+            are saved to a local leaderboard.
           </p>
         </div>
-        <div className="trust-pill"><ShieldCheck size={18} /> App Check + server scoring</div>
+        <div className="trust-pill"><ShieldCheck size={18} /> 100% on-device</div>
       </section>
 
       <section className="grid">
@@ -292,8 +299,8 @@ export default function App() {
             {!cameraReady && (
               <div className="camera-empty">
                 <Camera size={48} />
-                <strong>Camera stays local</strong>
-                <span>Only compact pose points are submitted for verification. No video is uploaded.</span>
+                <strong>Camera stays on your device</strong>
+                <span>Pose detection runs locally in your browser. Nothing is uploaded.</span>
               </div>
             )}
 
@@ -302,7 +309,7 @@ export default function App() {
             )}
 
             <div className="hud top-left">
-              <span className="label">Official target</span>
+              <span className="label">Time left</span>
               <strong>{formatTime(remainingMs)}</strong>
             </div>
             <div className="hud top-right">
@@ -329,7 +336,7 @@ export default function App() {
           {official && (
             <div className={official.accepted ? "notice success" : "notice error"}>
               <CheckCircle2 size={18} />
-              <span>{official.message} Score: {official.officialScore}. Samples checked: {sampleCount}.</span>
+              <span>{official.message} Score: {official.officialScore}. Frames analyzed: {sampleCount}.</span>
             </div>
           )}
         </div>
@@ -377,28 +384,34 @@ export default function App() {
           </div>
 
           <div className="security-stack">
-            <div><ShieldCheck size={18} /> Authenticated anonymous session</div>
-            <div><ShieldCheck size={18} /> App Check enforced Functions</div>
-            <div><ShieldCheck size={18} /> Firestore writes blocked from client</div>
-            <div><ShieldCheck size={18} /> Server recomputes every official score</div>
+            <div><ShieldCheck size={18} /> Runs fully on your device</div>
+            <div><ShieldCheck size={18} /> Camera feed never leaves your browser</div>
+            <div><ShieldCheck size={18} /> No sign-in or account needed</div>
+            <div><ShieldCheck size={18} /> Scores saved locally in this browser</div>
           </div>
         </aside>
       </section>
 
       <section className="leaderboard-card">
         <div className="section-heading">
-          <span><Medal size={19} /> Online leaderboard</span>
-          <small>Best verified score per player</small>
+          <span><Medal size={19} /> Local leaderboard</span>
+          {leaderboard.length > 0 ? (
+            <button className="link-btn" onClick={handleClearLeaderboard} aria-label="Clear leaderboard">
+              <Trash2 size={15} /> Clear
+            </button>
+          ) : (
+            <small>Saved on this device</small>
+          )}
         </div>
 
         <div className="leaderboard-list">
-          {leaderboard.length === 0 && <div className="empty-row">No verified dives yet. Be the first.</div>}
+          {leaderboard.length === 0 && <div className="empty-row">No dives yet. Set your first score!</div>}
           {leaderboard.map((entry, index) => (
-            <div className="leaderboard-row" key={entry.uid}>
+            <div className="leaderboard-row" key={entry.id}>
               <div className="rank">#{index + 1}</div>
               <div className="diver">
                 <strong>{entry.displayName || "Diver"}</strong>
-                <span>{Math.round(entry.bestDurationMs / 1000)}s verified run</span>
+                <span>{Math.round(entry.bestDurationMs / 1000)}s run</span>
               </div>
               <div className="score">{entry.bestScore}</div>
             </div>
