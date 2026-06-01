@@ -1,22 +1,24 @@
 import type { CompactPoseSample, CounterSnapshot, ScubaMetrics } from "../types";
 
-const REQUIRED_POINTS = 8;
+// Upper-body only: shoulders, elbows, wrists. No hips needed, so you only have
+// to keep your head-to-chest area in frame. Wrist height is measured relative to
+// the shoulder line and normalised by shoulder width, so it works at any distance.
+const REQUIRED_POINTS = 6;
 const STRIDE = 3;
-const HIGH_THRESHOLD = 0.16; // hands above/near shoulder line
-const LOW_THRESHOLD = 0.72; // hands near hips after the pull
-const MIN_PULL_MS = 170;
-const MIN_REP_GAP_MS = 240;
-const MAX_MISSING_MS = 650;
+const RAISE = -0.3; // wrists above the shoulder line -> "armed"
+const DROP = 0.45; // wrists pulled down below the shoulders -> count a rep
+const SYMMETRY_LIMIT = 2.6; // how unlevel the two wrists may be when raising (shoulder widths)
+const MIN_VISIBILITY = 0.3;
+const MIN_SHOULDER_WIDTH = 0.05;
+const MIN_PULL_MS = 120;
+const MIN_REP_GAP_MS = 220;
+const MAX_MISSING_MS = 700;
 
 type Point = { x: number; y: number; v: number };
 
 function point(sample: CompactPoseSample, index: number): Point {
   const base = index * STRIDE;
-  return {
-    x: sample.p[base],
-    y: sample.p[base + 1],
-    v: sample.p[base + 2]
-  };
+  return { x: sample.p[base], y: sample.p[base + 1], v: sample.p[base + 2] };
 }
 
 function clamp01(value: number): number {
@@ -27,14 +29,10 @@ export function sanitizeSample(sample: CompactPoseSample): CompactPoseSample | n
   if (!Number.isFinite(sample.t) || sample.t < 0 || !Array.isArray(sample.p) || sample.p.length !== REQUIRED_POINTS * STRIDE) {
     return null;
   }
-
   const p = sample.p.map((value, index) => {
     if (!Number.isFinite(value)) return NaN;
-    const coordSlot = index % STRIDE;
-    if (coordSlot === 2) return clamp01(value);
-    return value;
+    return index % STRIDE === 2 ? clamp01(value) : value;
   });
-
   if (p.some((value) => !Number.isFinite(value))) return null;
   return { t: Math.round(sample.t), p };
 }
@@ -47,55 +45,41 @@ export function computeScubaMetrics(raw: CompactPoseSample): ScubaMetrics {
 
   const ls = point(sample, 0);
   const rs = point(sample, 1);
-  const le = point(sample, 2);
-  const re = point(sample, 3);
   const lw = point(sample, 4);
   const rw = point(sample, 5);
-  const lh = point(sample, 6);
-  const rh = point(sample, 7);
 
-  const minVisibility = Math.min(ls.v, rs.v, le.v, re.v, lw.v, rw.v, lh.v, rh.v);
+  const minVisibility = Math.min(ls.v, rs.v, lw.v, rw.v);
+  if (minVisibility < MIN_VISIBILITY) {
+    return { valid: false, quality: minVisibility, phase: "hidden", strokeValue: 0, torso: 0, symmetry: 1, reason: "low-visibility" };
+  }
+
   const shoulderY = (ls.y + rs.y) / 2;
-  const hipY = (lh.y + rh.y) / 2;
-  const torso = hipY - shoulderY;
   const shoulderWidth = Math.abs(ls.x - rs.x);
-
-  if (minVisibility < 0.42) {
-    return { valid: false, quality: minVisibility, phase: "hidden", strokeValue: 0, torso, symmetry: 1, reason: "low-visibility" };
+  if (shoulderWidth < MIN_SHOULDER_WIDTH) {
+    return { valid: false, quality: 0.2, phase: "hidden", strokeValue: 0, torso: 0, symmetry: 1, reason: "turn-to-camera" };
   }
 
-  if (torso < 0.13 || torso > 0.75 || shoulderWidth < 0.06) {
-    return { valid: false, quality: 0.2, phase: "hidden", strokeValue: 0, torso, symmetry: 1, reason: "bad-framing" };
-  }
-
-  const avgWristY = (lw.y + rw.y) / 2;
-  const strokeValue = (avgWristY - shoulderY) / torso;
-  const symmetry = Math.abs(lw.y - rw.y) / Math.max(0.001, torso);
-  const elbowSanity = Math.abs(le.y - re.y) / Math.max(0.001, torso);
-
-  const symmetryScore = clamp01(1 - symmetry / 0.62);
-  const elbowScore = clamp01(1 - elbowSanity / 0.9);
-  const frameScore = clamp01((torso - 0.13) / 0.22);
-  const quality = clamp01(0.45 * minVisibility + 0.3 * symmetryScore + 0.15 * elbowScore + 0.1 * frameScore);
-
-  let phase: ScubaMetrics["phase"] = "pull";
-  if (strokeValue < HIGH_THRESHOLD) phase = "raise";
-  if (quality < 0.48 || symmetry > 0.8) phase = "hidden";
+  const denom = Math.max(0.04, shoulderWidth);
+  const wristY = (lw.y + rw.y) / 2;
+  const strokeValue = (wristY - shoulderY) / denom;
+  const symmetry = Math.abs(lw.y - rw.y) / denom;
+  const symmetryScore = clamp01(1 - symmetry / 3);
+  const quality = clamp01(0.7 * minVisibility + 0.3 * symmetryScore);
 
   return {
-    valid: quality >= 0.48,
+    valid: true,
     quality,
-    phase,
+    phase: strokeValue < RAISE ? "raise" : "pull",
     strokeValue,
-    torso,
+    torso: 0,
     symmetry,
-    reason: quality >= 0.48 ? undefined : "low-quality"
+    reason: undefined
   };
 }
 
 export class ScubaCounterEngine {
   private count = 0;
-  private readyToPull = false;
+  private armed = false;
   private raisedAtMs: number | null = null;
   private lastCountAtMs: number | null = null;
   private lastValidAtMs: number | null = null;
@@ -105,12 +89,12 @@ export class ScubaCounterEngine {
     quality: 0,
     strokeValue: 0,
     lastRepMs: null,
-    statusText: "Show your shoulders, hips, and hands"
+    statusText: "Show your shoulders and hands"
   };
 
   reset(): void {
     this.count = 0;
-    this.readyToPull = false;
+    this.armed = false;
     this.raisedAtMs = null;
     this.lastCountAtMs = null;
     this.lastValidAtMs = null;
@@ -120,7 +104,7 @@ export class ScubaCounterEngine {
       quality: 0,
       strokeValue: 0,
       lastRepMs: null,
-      statusText: "Raise both hands to arm the counter"
+      statusText: "Raise both hands to start"
     };
   }
 
@@ -129,36 +113,38 @@ export class ScubaCounterEngine {
 
     if (!metrics.valid) {
       const recentlyValid = this.lastValidAtMs != null && sample.t - this.lastValidAtMs < MAX_MISSING_MS;
+      const statusText =
+        metrics.reason === "turn-to-camera"
+          ? "Face the camera"
+          : recentlyValid
+            ? "Keep going"
+            : "Show your shoulders and hands";
       this.lastSnapshot = {
         count: this.count,
         phase: recentlyValid ? this.lastSnapshot.phase : "hidden",
         quality: metrics.quality,
         strokeValue: metrics.strokeValue,
         lastRepMs: this.lastCountAtMs,
-        statusText: recentlyValid ? "Keep moving" : "Step back: full upper body in frame"
+        statusText
       };
       return this.lastSnapshot;
     }
 
     this.lastValidAtMs = sample.t;
 
-    if (metrics.strokeValue < HIGH_THRESHOLD) {
-      this.readyToPull = true;
+    if (metrics.strokeValue < RAISE && metrics.symmetry < SYMMETRY_LIMIT) {
+      this.armed = true;
       this.raisedAtMs = sample.t;
     }
 
-    const enoughPullTime = this.raisedAtMs == null ? false : sample.t - this.raisedAtMs >= MIN_PULL_MS;
+    const enoughPull = this.raisedAtMs == null ? false : sample.t - this.raisedAtMs >= MIN_PULL_MS;
     const enoughGap = this.lastCountAtMs == null || sample.t - this.lastCountAtMs >= MIN_REP_GAP_MS;
 
-    if (this.readyToPull && metrics.strokeValue > LOW_THRESHOLD && enoughPullTime && enoughGap && metrics.quality > 0.56) {
+    if (this.armed && metrics.strokeValue > DROP && enoughPull && enoughGap) {
       this.count += 1;
       this.lastCountAtMs = sample.t;
-      this.readyToPull = false;
+      this.armed = false;
     }
-
-    const statusText = this.readyToPull
-      ? "Pull down like a scuba stroke"
-      : "Raise both hands above shoulders";
 
     this.lastSnapshot = {
       count: this.count,
@@ -166,9 +152,8 @@ export class ScubaCounterEngine {
       quality: metrics.quality,
       strokeValue: metrics.strokeValue,
       lastRepMs: this.lastCountAtMs,
-      statusText
+      statusText: this.armed ? "Pull your hands down" : "Raise both hands overhead"
     };
-
     return this.lastSnapshot;
   }
 

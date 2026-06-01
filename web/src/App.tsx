@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Lock, Medal, Play, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
+import { Camera, Play, RotateCcw, ShieldCheck, Sparkles, Trash2, Trophy, Waves } from "lucide-react";
 import type { NormalizedLandmark, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { ScubaCounterEngine, summarizeQuality } from "./lib/counter";
 import { clearLeaderboard, loadLeaderboard, saveScore } from "./lib/leaderboard";
@@ -17,6 +17,7 @@ const COUNTDOWN_SECONDS = 3;
 const MAX_LOCAL_SAMPLES = 1300;
 const MAX_DURATION_MS = 60_000;
 const SAMPLE_INTERVAL_MS = 83; // ~12 Hz. Enough for accurate counting, light on the CPU.
+const DURATIONS = [15, 30, 45, 60];
 
 function safeError(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -30,6 +31,18 @@ function formatTime(ms: number): string {
 
 function sanitizeDisplayName(value: string): string {
   return value.replace(/[^a-zA-Z0-9 _.-]/g, "").trim().slice(0, 18) || "Diver";
+}
+
+// --- presentational helpers (avatars for the leaderboard) ---
+const AVATAR_HUES = [12, 168, 268, 200, 96, 38, 330, 140];
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return `oklch(0.62 0.13 ${AVATAR_HUES[h % AVATAR_HUES.length]})`;
+}
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
 }
 
 export default function App() {
@@ -58,14 +71,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [localCount, setLocalCount] = useState(0);
+  const [bump, setBump] = useState(0);
   const [official, setOfficial] = useState<RunResult | null>(null);
   const [quality, setQuality] = useState(0);
-  const [stageText, setStageText] = useState("Enable camera to calibrate");
+  const [stageText, setStageText] = useState("Press start when you're ready");
   const [remainingMs, setRemainingMs] = useState(DEFAULT_DURATION_SECONDS * 1000);
   const [sampleCount, setSampleCount] = useState(0);
 
   const cleanName = useMemo(() => sanitizeDisplayName(displayName), [displayName]);
   const canStart = cameraReady && status !== "running" && status !== "submitting" && status !== "countdown";
+  const isRunning = status === "running" || status === "countdown";
 
   useEffect(() => {
     setLeaderboard(loadLeaderboard());
@@ -76,6 +91,11 @@ export default function App() {
       landmarkerRef.current?.close();
     };
   }, []);
+
+  // Pop the rep counter whenever the live count climbs during a run.
+  useEffect(() => {
+    if (status === "running" && localCount > 0) setBump((b) => b + 1);
+  }, [localCount, status]);
 
   function syncCanvasSize() {
     const video = videoRef.current;
@@ -229,8 +249,8 @@ export default function App() {
           qualityAvg,
           isNewBest,
           message: isNewBest
-            ? "New personal best saved to your leaderboard."
-            : "Saved. Your previous best is still higher."
+            ? "New personal best saved to the leaderboard."
+            : "Saved — your previous best is still higher."
         });
       } else {
         setOfficial({
@@ -245,7 +265,7 @@ export default function App() {
 
       setLocalCount(finalCount);
       setStatus("finished");
-      setStageText(accepted ? "Score saved to your leaderboard" : "No reps detected");
+      setStageText(accepted ? "Run complete" : "No reps detected");
     } catch (err) {
       setStatus(cameraReady ? "ready" : "error");
       setError(safeError(err));
@@ -266,158 +286,264 @@ export default function App() {
     setQuality(0);
     setSampleCount(0);
     setRemainingMs(durationSeconds * 1000);
-    setStageText(cameraReady ? "Raise both hands above shoulders" : "Enable camera to calibrate");
+    setStageText(cameraReady ? "Raise both hands above shoulders" : "Press start when you're ready");
     setStatus(cameraReady ? "ready" : "idle");
     setCountdown(null);
   }
 
   function handleClearLeaderboard() {
     setLeaderboard(clearLeaderboard());
+    setOfficial(null);
   }
 
+  // Rank of the most recent run within the leaderboard.
+  const myRank = useMemo(() => {
+    if (!official?.accepted) return null;
+    const idx = leaderboard.findIndex((e) => e.displayName.toLowerCase() === cleanName.toLowerCase());
+    return idx >= 0 ? idx + 1 : null;
+  }, [official, leaderboard, cleanName]);
+
+  const repsPerMin = official?.accepted && official.durationMs > 0
+    ? Math.round((official.officialScore / (official.durationMs / 1000)) * 60)
+    : 0;
+
+  const hasMyEntry = leaderboard.some((e) => e.displayName.toLowerCase() === cleanName.toLowerCase());
+  const showOverlay = isRunning || status === "finished" || status === "submitting";
+
   return (
-    <main className="shell">
-      <section className="hero">
-        <div>
-          <p className="eyebrow"><Waves size={18} /> Viral camera challenge</p>
-          <h1>SCUBA Counter</h1>
-          <p className="hero-copy">
-            Raise both hands, pull down like an underwater scuba stroke, and beat your own best.
-            Everything runs on your device — your camera feed never leaves the browser, and scores
-            are saved to a local leaderboard.
+    <div>
+      <header className="topbar">
+        <div className="page topbar-inner">
+          <div className="wordmark">
+            <span className="glyph"><Waves size={17} /></span>
+            <b>Scuba Speed</b>
+          </div>
+          <nav className="nav">
+            <a href="#how" className="hide-sm">How it works</a>
+            <a href="#leaderboard">Leaderboard</a>
+            <span className="rank-chip"><Trophy size={14} /> {leaderboard.length} ranked</span>
+          </nav>
+        </div>
+      </header>
+
+      <main className="page">
+        <section className="hero">
+          <p className="kicker"><Trophy size={15} /> Camera speed challenge</p>
+          <h1>
+            How many strokes can you<br />pull in <span className="accent">{durationSeconds} seconds?</span>
+          </h1>
+          <p>
+            Raise both hands, pull down like a scuba stroke, and rack up reps before the clock runs out.
+            Your camera does the counting — every rep lands you on the board.
           </p>
-        </div>
-        <div className="trust-pill"><ShieldCheck size={18} /> 100% on-device</div>
-      </section>
+        </section>
 
-      <section className="grid">
-        <div className="camera-card">
-          <div className="camera-frame">
-            <video ref={videoRef} className="camera-video" aria-label="Camera preview" />
-            <canvas ref={canvasRef} className="pose-canvas" />
+        <section className="arena-grid">
+          <div className="card arena">
+            <div className="stage">
+              <video ref={videoRef} className="camera-video" playsInline muted aria-label="Camera preview" />
+              <canvas ref={canvasRef} className="pose-canvas" />
 
-            {!cameraReady && (
-              <div className="camera-empty">
-                <Camera size={48} />
-                <strong>Camera stays on your device</strong>
-                <span>Pose detection runs locally in your browser. Nothing is uploaded.</span>
+              {!cameraReady && (
+                <div className="stage-empty">
+                  <span className="ring"><Camera size={26} /></span>
+                  <strong>Turn on your camera to play</strong>
+                  <span>Pose detection runs in your browser. Nothing is recorded or uploaded.</span>
+                </div>
+              )}
+
+              {countdown != null && <div className="countdown"><span key={countdown}>{countdown}</span></div>}
+
+              {showOverlay && (
+                <>
+                  <div className="hud tl">
+                    <span className="hud-label">Time</span>
+                    <span className="hud-val clock">{formatTime(remainingMs)}</span>
+                  </div>
+                  <div className="hud tr">
+                    <span className="hud-label">Tracking</span>
+                    <span className="hud-val">{Math.round(quality * 100)}%</span>
+                  </div>
+                  <div className="repcount" aria-live="polite">
+                    <span className={"num" + (bump ? " bump" : "")} key={bump}>{localCount}</span>
+                    <span className="reps-label">reps</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="coach">
+              <span className="coach-icon"><Sparkles size={17} /></span>
+              <div className="coach-text">
+                <span className="lbl">Coach</span>
+                <strong>{stageText}</strong>
               </div>
-            )}
+              <div className="track" aria-hidden="true">
+                <span style={{ width: `${Math.max(6, Math.round(quality * 100))}%` }} />
+              </div>
+            </div>
 
-            {countdown != null && (
-              <div className="countdown" aria-live="assertive">{countdown}</div>
-            )}
-
-            <div className="hud top-left">
-              <span className="label">Time left</span>
-              <strong>{formatTime(remainingMs)}</strong>
-            </div>
-            <div className="hud top-right">
-              <span className="label">Tracking</span>
-              <strong>{Math.round(quality * 100)}%</strong>
-            </div>
-            <div className="count-hud" aria-live="polite">
-              <span>SCUBA</span>
-              <strong>{localCount}</strong>
-            </div>
+            {error && <div className="notice err"><ShieldCheck size={16} /> {error}</div>}
           </div>
 
-          <div className="motion-coach">
+          <aside>
+            <div className="card panel">
+              <p className="panel-title">Your run</p>
+
+              <div className="field">
+                <label htmlFor="diver">Display name</label>
+                <input
+                  id="diver"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  maxLength={18}
+                  placeholder="Enter a name"
+                  autoComplete="nickname"
+                  disabled={isRunning}
+                />
+              </div>
+
+              <div className="field">
+                <label>Length</label>
+                <div className="seg">
+                  {DURATIONS.map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={durationSeconds === d}
+                      disabled={isRunning}
+                      onClick={() => {
+                        setDurationSeconds(d);
+                        if (status !== "running") setRemainingMs(d * 1000);
+                      }}
+                    >
+                      {d}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="btn-row">
+                {!cameraReady ? (
+                  <button className="btn btn-primary" onClick={enableCamera} disabled={status === "loading-model"}>
+                    <Camera size={19} /> {status === "loading-model" ? "Loading…" : "Turn on camera"}
+                  </button>
+                ) : (
+                  <button className="btn btn-primary" onClick={startRun} disabled={!canStart}>
+                    <Play size={19} /> {status === "finished" ? "Go again" : "Start run"}
+                  </button>
+                )}
+                {(isRunning || status === "finished" || status === "submitting") && (
+                  <button className="btn btn-ghost" onClick={resetRun} disabled={status === "submitting"}>
+                    <RotateCcw size={16} /> Reset
+                  </button>
+                )}
+              </div>
+
+              <div className="privacy">
+                <ShieldCheck size={15} />
+                <span>Runs on your device. Your camera feed never leaves the browser.</span>
+              </div>
+            </div>
+
+            {official && (
+              <div className={"card result" + (official.accepted && official.isNewBest ? " win" : "")}>
+                <div className="result-head">
+                  <span className={"tag" + (official.accepted ? "" : " muted")}>
+                    {official.accepted ? (official.isNewBest ? "New personal best" : "Run saved") : "No score"}
+                  </span>
+                </div>
+
+                {official.accepted ? (
+                  <>
+                    <div className="result-big">
+                      <span className="n">{official.officialScore}</span>
+                      <span className="u">reps in {Math.round(official.durationMs / 1000)}s</span>
+                    </div>
+                    <div className="result-stats">
+                      {myRank != null && (
+                        <div className="s"><div className="v">#{myRank}</div><div className="k">Leaderboard rank</div></div>
+                      )}
+                      <div className="s"><div className="v">{repsPerMin}</div><div className="k">Reps / min</div></div>
+                      <div className="s"><div className="v">{Math.round(official.qualityAvg * 100)}%</div><div className="k">Tracking</div></div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="result-msg">{official.message}</p>
+                )}
+              </div>
+            )}
+          </aside>
+        </section>
+
+        <section className="how" id="how">
+          <h2>Three moves. One clock.</h2>
+          <p className="section-sub">No setup, no sign-up. Stand back so your upper body fills the frame.</p>
+          <div className="steps">
+            <div className="step">
+              <div className="idx">01</div>
+              <h3>Hands up</h3>
+              <p>Reach both arms above your shoulders to load the stroke.</p>
+            </div>
+            <div className="step">
+              <div className="idx">02</div>
+              <h3>Pull down</h3>
+              <p>Drive both hands straight down past your hips. That's one rep.</p>
+            </div>
+            <div className="step">
+              <div className="idx">03</div>
+              <h3>Repeat, fast</h3>
+              <p>Keep a clean rhythm until the timer hits zero. Speed wins.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="lb-wrap" id="leaderboard">
+          <div className="lb-head">
             <div>
-              <span className="label">Coach</span>
-              <strong>{stageText}</strong>
-            </div>
-            <div className="quality-bar" aria-label={`Tracking quality ${Math.round(quality * 100)} percent`}>
-              <span style={{ width: `${Math.max(5, Math.round(quality * 100))}%` }} />
+              <h2>Leaderboard</h2>
+              <p className="section-sub" style={{ margin: 0 }}>Best scores saved on this device.</p>
             </div>
           </div>
 
-          {error && <div className="notice error">{error}</div>}
-          {official && (
-            <div className={official.accepted ? "notice success" : "notice error"}>
-              <CheckCircle2 size={18} />
-              <span>{official.message} Score: {official.officialScore}. Frames analyzed: {sampleCount}.</span>
-            </div>
-          )}
-        </div>
-
-        <aside className="control-card">
-          <div className="section-heading">
-            <span>Controls</span>
-            <Lock size={17} />
-          </div>
-
-          <label className="field">
-            <span>Diver name</span>
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              maxLength={18}
-              placeholder="Diver"
-              autoComplete="nickname"
-            />
-          </label>
-
-          <label className="field">
-            <span>Run length</span>
-            <select value={durationSeconds} onChange={(event) => setDurationSeconds(Number(event.target.value))}>
-              <option value={15}>15 seconds</option>
-              <option value={30}>30 seconds</option>
-              <option value={45}>45 seconds</option>
-              <option value={60}>60 seconds</option>
-            </select>
-          </label>
-
-          <div className="button-row">
-            {!cameraReady ? (
-              <button className="primary" onClick={enableCamera} disabled={status === "loading-model"}>
-                <Camera size={19} /> {status === "loading-model" ? "Loading…" : "Enable camera"}
-              </button>
-            ) : (
-              <button className="primary" onClick={startRun} disabled={!canStart}>
-                <Play size={19} /> Start dive
-              </button>
+          <div className="lb">
+            {leaderboard.length === 0 && (
+              <div className="lb-empty">No runs yet — set your first score above.</div>
             )}
-            <button className="ghost" onClick={resetRun} disabled={status === "submitting"}>
-              <RotateCcw size={18} /> Reset
-            </button>
+            {leaderboard.map((entry, index) => {
+              const rank = index + 1;
+              const you = entry.displayName.toLowerCase() === cleanName.toLowerCase();
+              const name = entry.displayName || "Diver";
+              return (
+                <div className={"lb-row" + (you ? " you" : "") + (rank <= 3 ? " r" + rank : "")} key={entry.id}>
+                  <span className="lb-rank">{rank}</span>
+                  <div className="lb-diver">
+                    <span className="lb-ava" style={{ background: avatarColor(name) }}>{initials(name)}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="lb-name">{name}{you && <span className="you-tag">YOU</span>}</div>
+                      <div className="lb-meta">{Math.round(entry.bestQualityAvg * 100)}% tracking</div>
+                    </div>
+                  </div>
+                  <span className="lb-dur">{Math.round(entry.bestDurationMs / 1000)}s</span>
+                  <span className="lb-score">{entry.bestScore}</span>
+                </div>
+              );
+            })}
           </div>
 
-          <div className="security-stack">
-            <div><ShieldCheck size={18} /> Runs fully on your device</div>
-            <div><ShieldCheck size={18} /> Camera feed never leaves your browser</div>
-            <div><ShieldCheck size={18} /> No sign-in or account needed</div>
-            <div><ShieldCheck size={18} /> Scores saved locally in this browser</div>
+          <div className="lb-foot">
+            <span>{myRank != null ? `You're #${myRank}` : "Run once to claim your spot"}</span>
+            {leaderboard.length > 0 && (
+              <button onClick={handleClearLeaderboard}><Trash2 size={15} /> Clear leaderboard</button>
+            )}
           </div>
-        </aside>
-      </section>
+        </section>
 
-      <section className="leaderboard-card">
-        <div className="section-heading">
-          <span><Medal size={19} /> Local leaderboard</span>
-          {leaderboard.length > 0 ? (
-            <button className="link-btn" onClick={handleClearLeaderboard} aria-label="Clear leaderboard">
-              <Trash2 size={15} /> Clear
-            </button>
-          ) : (
-            <small>Saved on this device</small>
-          )}
-        </div>
-
-        <div className="leaderboard-list">
-          {leaderboard.length === 0 && <div className="empty-row">No dives yet. Set your first score!</div>}
-          {leaderboard.map((entry, index) => (
-            <div className="leaderboard-row" key={entry.id}>
-              <div className="rank">#{index + 1}</div>
-              <div className="diver">
-                <strong>{entry.displayName || "Diver"}</strong>
-                <span>{Math.round(entry.bestDurationMs / 1000)}s run</span>
-              </div>
-              <div className="score">{entry.bestScore}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-    </main>
+        <footer className="foot">
+          <span>Scuba Speed</span>
+          <span>On-device pose detection · No video leaves your browser</span>
+        </footer>
+      </main>
+    </div>
   );
 }

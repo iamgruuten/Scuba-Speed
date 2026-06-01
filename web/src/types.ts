@@ -3,7 +3,7 @@ export type RunStatus = "idle" | "loading-model" | "ready" | "countdown" | "runn
 export type CompactPoseSample = {
   /** elapsed milliseconds since the run began */
   t: number;
-  /** fixed order: leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist, leftHip, rightHip. Each point is x,y,visibility. */
+  /** fixed order: leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist. Each point is x,y,visibility. */
   p: number[];
 };
 
