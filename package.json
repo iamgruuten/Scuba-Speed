@@ -1,0 +1,23 @@
+{
+  "name": "scuba-counter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Camera-based SCUBA counter with Firebase leaderboard and server-side score verification.",
+  "workspaces": [
+    "web",
+    "functions"
+  ],
+  "scripts": {
+    "dev": "npm --workspace web run dev",
+    "build": "npm --workspace web run build && npm --workspace functions run build",
+    "lint": "npm --workspace web run lint && npm --workspace functions run lint",
+    "emulators": "firebase emulators:start --only auth,functions,firestore,hosting",
+    "deploy": "npm run build && firebase deploy",
+    "deploy:hosting": "npm --workspace web run build && firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "deploy:functions": "npm --workspace functions run build && firebase deploy --only functions"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

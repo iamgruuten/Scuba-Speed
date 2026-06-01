@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Public read-only leaderboard. All writes go through Cloud Functions Admin SDK.
+    match /leaderboard/{uid} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // Users may read their own run verification result, but cannot write it.
+    match /runs/{runId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Internal documents. Cloud Functions Admin SDK bypasses rules.
+    match /rateLimits/{docId} {
+      allow read, write: if false;
+    }
+
+    match /audit/{docId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
