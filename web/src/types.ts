@@ -3,26 +3,24 @@ export type RunStatus = "idle" | "loading-model" | "ready" | "countdown" | "runn
 export type CompactPoseSample = {
   /** elapsed milliseconds since the run began */
   t: number;
-  /** fixed order: leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist. Each point is x,y,visibility. */
+  /** fixed order: nose, leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist. Each point is x,y,visibility. */
   p: number[];
 };
 
 export type ScubaMetrics = {
   valid: boolean;
   quality: number;
-  phase: "raise" | "pull" | "hidden";
-  strokeValue: number;
-  torso: number;
-  symmetry: number;
+  /** one hand is up at the nose ("plugging" it) */
+  noseHeld: boolean;
+  /** free hand horizontal position, in shoulder-width units from body center */
+  freeX: number;
   reason?: string;
 };
 
 export type CounterSnapshot = {
   count: number;
-  phase: ScubaMetrics["phase"];
   quality: number;
-  strokeValue: number;
-  lastRepMs: number | null;
+  noseHeld: boolean;
   statusText: string;
 };
 

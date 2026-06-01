@@ -9,8 +9,9 @@ const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 
-// Upper body only: shoulders, elbows, wrists.
-const POINT_INDEXES = [11, 12, 13, 14, 15, 16] as const;
+// Nose + shoulders + elbows + wrists. Enough to detect the "plug your nose and
+// wave" scuba pose from the upper body alone.
+const POINT_INDEXES = [0, 11, 12, 13, 14, 15, 16] as const;
 const ACCENT = "217, 119, 87"; // Claude terracotta (rgb)
 
 export async function createPoseLandmarker(): Promise<PoseLandmarker> {

@@ -170,7 +170,7 @@ export default function App() {
       streamRef.current = await startCamera(videoRef.current);
       setCameraReady(true);
       setStatus("ready");
-      setStageText("Raise both hands above shoulders");
+      setStageText("Plug your nose, then wave your free hand");
       startLoop();
     } catch (err) {
       setStatus("error");
@@ -211,7 +211,7 @@ export default function App() {
         displayName: cleanName
       };
       setStatus("running");
-      setStageText("Raise both hands above shoulders");
+      setStageText("Plug your nose, then wave your free hand");
     } catch (err) {
       setCountdown(null);
       setStatus(cameraReady ? "ready" : "error");
@@ -259,7 +259,7 @@ export default function App() {
           durationMs,
           qualityAvg,
           isNewBest: false,
-          message: "No reps detected. Frame your upper body and try again."
+          message: "No waves detected. Plug your nose and wave your free hand."
         });
       }
 
@@ -286,7 +286,7 @@ export default function App() {
     setQuality(0);
     setSampleCount(0);
     setRemainingMs(durationSeconds * 1000);
-    setStageText(cameraReady ? "Raise both hands above shoulders" : "Press start when you're ready");
+    setStageText(cameraReady ? "Plug your nose, then wave your free hand" : "Press start when you're ready");
     setStatus(cameraReady ? "ready" : "idle");
     setCountdown(null);
   }
@@ -330,11 +330,11 @@ export default function App() {
         <section className="hero">
           <p className="kicker"><Trophy size={15} /> Camera speed challenge</p>
           <h1>
-            How many strokes can you<br />pull in <span className="accent">{durationSeconds} seconds?</span>
+            How many scuba waves can you<br />pull off in <span className="accent">{durationSeconds} seconds?</span>
           </h1>
           <p>
-            Raise both hands, pull down like a scuba stroke, and rack up reps before the clock runs out.
-            Your camera does the counting — every rep lands you on the board.
+            Plug your nose like you're diving, wave your free hand to the beat, and rack up waves before the clock runs out.
+            Your camera does the counting — every wave lands you on the board.
           </p>
         </section>
 
@@ -366,7 +366,7 @@ export default function App() {
                   </div>
                   <div className="repcount" aria-live="polite">
                     <span className={"num" + (bump ? " bump" : "")} key={bump}>{localCount}</span>
-                    <span className="reps-label">reps</span>
+                    <span className="reps-label">waves</span>
                   </div>
                 </>
               )}
@@ -458,13 +458,13 @@ export default function App() {
                   <>
                     <div className="result-big">
                       <span className="n">{official.officialScore}</span>
-                      <span className="u">reps in {Math.round(official.durationMs / 1000)}s</span>
+                      <span className="u">waves in {Math.round(official.durationMs / 1000)}s</span>
                     </div>
                     <div className="result-stats">
                       {myRank != null && (
                         <div className="s"><div className="v">#{myRank}</div><div className="k">Leaderboard rank</div></div>
                       )}
-                      <div className="s"><div className="v">{repsPerMin}</div><div className="k">Reps / min</div></div>
+                      <div className="s"><div className="v">{repsPerMin}</div><div className="k">Waves / min</div></div>
                       <div className="s"><div className="v">{Math.round(official.qualityAvg * 100)}%</div><div className="k">Tracking</div></div>
                     </div>
                   </>
@@ -478,22 +478,22 @@ export default function App() {
 
         <section className="how" id="how">
           <h2>Three moves. One clock.</h2>
-          <p className="section-sub">No setup, no sign-up. Stand back so your upper body fills the frame.</p>
+          <p className="section-sub">No setup, no sign-up. Keep your head and hands in frame.</p>
           <div className="steps">
             <div className="step">
               <div className="idx">01</div>
-              <h3>Hands up</h3>
-              <p>Reach both arms above your shoulders to load the stroke.</p>
+              <h3>Plug your nose</h3>
+              <p>Hold your nose with one hand, like you're about to dive.</p>
             </div>
             <div className="step">
               <div className="idx">02</div>
-              <h3>Pull down</h3>
-              <p>Drive both hands straight down past your hips. That's one rep.</p>
+              <h3>Wave to the beat</h3>
+              <p>Sweep your free hand side to side in front of you. That's a wave.</p>
             </div>
             <div className="step">
               <div className="idx">03</div>
-              <h3>Repeat, fast</h3>
-              <p>Keep a clean rhythm until the timer hits zero. Speed wins.</p>
+              <h3>Keep the rhythm</h3>
+              <p>Bounce your knees and keep waving until the timer hits zero.</p>
             </div>
           </div>
         </section>
